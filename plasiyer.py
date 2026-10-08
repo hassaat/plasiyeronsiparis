@@ -4,10 +4,18 @@ import pandas as pd
 from datetime import datetime
 import time
 
-# --- 1. SAYFA AYARLARI ---
-st.set_page_config(page_title="Ön Sipariş Paneli", layout="centered", page_icon="📝")
+# --- 1. SAYFA AYARLARI VE CSS ---
+st.set_page_config(
+    page_title="Ön Sipariş Paneli", 
+    layout="centered", 
+    page_icon="📝"
+)
 
-# Arayüz Makyajı (CSS)
+# Session State Tanımlamaları
+if "siparis_gonderildi" not in st.session_state:
+    st.session_state.siparis_gonderildi = False
+
+# Arayüz Özelleştirmeleri
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -17,13 +25,10 @@ st.markdown("""
     .price-text { color: #2ecc71; font-weight: bold; font-size: 1.15rem; }
     .model-header { font-size: 1.1rem; font-weight: bold; color: #222; margin-bottom: 2px; }
     [data-testid="stImage"] img { border-radius: 12px; }
-    /* Form alanlarını güzelleştirme */
     .stTextInput input { border-radius: 8px; }
     .stNumberInput div { border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
-
-# ... yukarıdaki kodlar (Sayfa Ayarları ve CSS) ...
 
 # --- 2. LOGO VE BAŞLIK ---
 LOGO_URL = "https://b2bc.ams3.cdn.digitaloceanspaces.com/haselektron/ckeditor/pictures/66/hassaat-logo2.png"
@@ -46,93 +51,122 @@ st.markdown(f"""
     """, unsafe_allow_html=True)
 
 # --- 3. VERİ BAĞLANTISI ---
-URL = "https://script.google.com/macros/s/AKfycbw83NbpOl5RsmarGBPXnh8YSO4g0RV-z-Ql_rGH2HvWSoJZMnPvW_E4eIbn55mlQlrbmg/exec"
+URL = "https://script.google.com/macros/s/AKfycbxa1l6I94GmBc_9HVA46MZpyLjYKVY5OwziZxT9xOEm2YNx8Hh4i5mgOYaEkziKd4wp/exec"
 
-      
-
-
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def verileri_yukle():
-    try:
-        res = requests.get(URL, timeout=10)
-        if res.status_code == 200:
-            return pd.DataFrame(res.json())
-    except:
-        pass
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    for _ in range(5):
+        try:
+            res = requests.get(URL, headers=headers, timeout=20, allow_redirects=True)
+            if res.status_code == 200:
+                json_data = res.json()
+                if isinstance(json_data, list) and len(json_data) > 0:
+                    return pd.DataFrame(json_data)
+        except Exception:
+            time.sleep(1)
     return pd.DataFrame()
 
-# --- 4. ANA FORM ---
+# --- 4. ANA FORM VE AKIŞ ---
 df = verileri_yukle()
 
 if df.empty:
-    st.error("⚠️ Stok listesi şu an yüklenemiyor. Lütfen bağlantıyı kontrol edin.")
+    st.error("⚠️ Stok listesi şu an yüklenemiyor. Lütfen birkaç saniye sonra yeniden deneyin.")
+    if st.button("🔄 Yeniden Dene", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 else:
-    # Müşteri Bilgileri
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        musteri = st.text_input("👤 Firma Adı", placeholder="Firma Adı")
-    with col_b2:
-        firma = st.text_input("🏢 Sipariş Notu", placeholder="Sipariş Notu")
+    # Sipariş başarıyla gönderildiyse gösterilecek ekran
+    if st.session_state.siparis_gonderildi:
+        st.balloons()
+        st.success("✅ Siparişiniz başarıyla iletilmiştir!")
+        if st.button("➕ Yeni Sipariş Oluştur", type="primary", use_container_width=True):
+            st.session_state.siparis_gonderildi = False
+            st.rerun()
 
-    st.write("---")
-    st.subheader("Mevcut Modeller")
-    
-    siparisler = {}
+    # --- SİPARİŞ FORMU BAŞLANGICI ---
+    # clear_on_submit=True özelliği buton basıldığı anda tüm alanları (adet, metin) sıfırlar
+    with st.form(key="siparis_formu", clear_on_submit=True):
+        
+        # Müşteri Bilgileri
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            musteri = st.text_input("👤 Adınız Soyadınız", placeholder="Adınız Soyadınız (Firma Adı / İl )")
+        with col_b2:
+            firma = st.text_input("🏢 Sipariş Notu", placeholder="Sipariş Notu")
 
-    for i, row in df.iterrows():
-        model_kodu = str(row.get('Kodu', ''))
-        stok_miktari = row.get('Miktar', 0)
-        gorsel_linki = row.get('URL', '')
-        fiyat = row.get('P.S.F.', '0')
+        st.write("---")
+        st.subheader("Mevcut Modeller")
+        
+        siparisler = {}
 
-        try:
-            stok = int(float(stok_miktari))
-        except:
-            stok = 0
+        # Ürünleri Listeleme Döngüsü
+        for i, row in df.iterrows():
+            model_kodu = str(row.get('Kodu', '')).strip()
+            stok_miktari = row.get('Miktar', 0)
+            gorsel_linki = row.get('URL', '')
+            fiyat = row.get('P.S.F.', '0')
 
-        if stok > 0:
-            with st.container():
-                c_img, c_info, c_input = st.columns([1, 2, 1])
-                with c_img:
-                    if gorsel_linki:
-                        st.image(gorsel_linki, use_container_width=True)
-                with c_info:
-                    st.markdown(f"<p class='model-header'>{model_kodu}</p>", unsafe_allow_html=True)
-                    st.markdown(f"Fiyat: <span class='price-text'>{fiyat} TL</span>", unsafe_allow_html=True)
-                    st.caption(f"Stok: {stok}")
-                with c_input:
-                    adet = st.number_input("Adet", min_value=0, max_value=stok, key=f"sel_{i}", step=1)
-                    if adet > 0:
-                        siparisler[model_kodu] = adet
-            st.divider()
+            try:
+                stok = int(float(stok_miktari))
+            except:
+                stok = 0
 
-    # --- SİPARİŞ GÖNDERME ---
-    if st.button("🚀 Siparişi Onayla ve Gönder", use_container_width=True, type="primary"):
+            # Sadece stoğu olan ürünleri göster
+            if stok > 0 and model_kodu:
+                input_key = f"sel_{model_kodu}"
+
+                with st.container():
+                    c_img, c_info, c_input = st.columns([1, 2, 1])
+                    with c_img:
+                        if gorsel_linki:
+                            st.image(gorsel_linki, use_container_width=True)
+                    with c_info:
+                        st.markdown(f"<p class='model-header'>{model_kodu}</p>", unsafe_allow_html=True)
+                        st.markdown(f"Fiyat: <span class='price-text'>{fiyat} TL</span>", unsafe_allow_html=True)
+                        st.caption(f"Stok: {stok}")
+                    with c_input:
+                        adet = st.number_input("Adet", min_value=0, max_value=stok, key=input_key, step=1)
+                        if adet > 0:
+                            siparisler[model_kodu] = adet
+                st.divider()
+
+        # Form Gönderme Butonu
+        gonder_butonu = st.form_submit_button("🚀 Siparişi Onayla ve Gönder", type="primary", use_container_width=True)
+
+    # --- SİPARİŞİ İŞLEME VE GÖNDERME ---
+    if gonder_butonu:
         if musteri and firma and siparisler:
-            veri_paketi = []
-            for m, a in siparisler.items():
-                veri_paketi.append({
+            veri_paketi = [
+                {
                     "Tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
                     "Müşteri": musteri,
                     "Firma": firma,
                     "Model": m,
                     "Adet": a
-                })
+                } for m, a in siparisler.items()
+            ]
             
             with st.spinner("Siparişiniz iletiliyor..."):
-                try:
-                    requests.post(URL, json=veri_paketi, timeout=15)
-                    st.success("✅ Siparişiniz başarıyla iletildi!")
-                    st.cache_data.clear()
-                    time.sleep(2)
-                    st.rerun()
-                except:
-                    st.success("✅ Sipariş iletildi (Sayfa yenileniyor).")
-                    st.cache_data.clear()
-                    time.sleep(2)
-                    st.rerun()
-        else:
-            st.warning("⚠️ Lütfen isim, firma ve en az bir ürün seçtiğinizden emin olun.")
+                basarili = False
+                for _ in range(3):
+                    try:
+                        res = requests.post(URL, json=veri_paketi, timeout=25)
+                        if res.status_code == 200 and "Başarılı" in res.text:
+                            basarili = True
+                            break
+                    except:
+                        time.sleep(1)
 
+                if basarili:
+                    st.session_state.siparis_gonderildi = True
+                    st.cache_data.clear()  # Stokları güncellemek için önbelleği sıfırla
+                    st.rerun()  # Sayfayı sıfırlanmış olarak baştan yükle
+                else:
+                    st.error("⚠️ Sunucu yoğunluğu nedeniyle iletilemedi. Lütfen tekrar deneyin.")
+        else:
+            st.warning("⚠️ Lütfen adınızı, firmanızı doldurduğunuzdan ve en az bir üründen adet seçtiğinizden emin olun.")
 
 st.caption("© 2026 Has Saat")
